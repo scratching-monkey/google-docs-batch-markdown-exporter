@@ -1,15 +1,17 @@
 using Google.Apis.Drive.v3;
 using Spectre.Console;
-using System.Linq;
-using System.Threading.Tasks;
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 
 public class GoogleDriveManager
 {
     private readonly DriveService _service;
     private readonly List<(string Id, string Name)> _currentPath = new() { ("root", "My Drive") };
     private string CurrentFolderId => _currentPath.Last().Id;
+    private const string MimeTypeQuery = "(mimeType='application/vnd.google-apps.folder' or mimeType='application/vnd.google-apps.document')";
 
     public GoogleDriveManager(DriveService service)
     {
@@ -24,7 +26,7 @@ public class GoogleDriveManager
     public async Task ListCurrentDirectory()
     {
         var request = _service.Files.List();
-        request.Q = $"'{CurrentFolderId}' in parents and trashed = false";
+        request.Q = $"'{CurrentFolderId}' in parents and {MimeTypeQuery} and trashed = false";
         request.Fields = "files(id, name, mimeType)";
         request.OrderBy = "folder, name";
 
@@ -83,6 +85,17 @@ public class GoogleDriveManager
         }
     }
 
+    public async Task<IEnumerable<string>> GetCurrentDirectoryItemNames()
+    {
+        var request = _service.Files.List();
+        request.Q = $"'{CurrentFolderId}' in parents and {MimeTypeQuery} and trashed = false";
+        request.Fields = "files(name)";
+        request.OrderBy = "folder, name";
+
+        var result = await request.ExecuteAsync();
+        return result.Files?.Select(f => f.Name) ?? Enumerable.Empty<string>();
+    }
+
     public async Task Download(string itemName, bool force)
     {
         if (itemName == ".")
@@ -92,8 +105,8 @@ public class GoogleDriveManager
         }
 
         var request = _service.Files.List();
-        request.Q = $"'{CurrentFolderId}' in parents and name = '{itemName}' and trashed = false";
-        request.Fields = "files(id, name, mimeType)";
+        request.Q = $"'{CurrentFolderId}' in parents and name = '{itemName}' and {MimeTypeQuery} and trashed = false";
+        request.Fields = "files(id, name, mimeType, createdTime, modifiedTime)";
         var result = await request.ExecuteAsync();
 
         var item = result.Files.FirstOrDefault();
@@ -118,8 +131,8 @@ public class GoogleDriveManager
         AnsiConsole.MarkupLine($"Downloading all items in the current directory...");
 
         var request = _service.Files.List();
-        request.Q = $"'{CurrentFolderId}' in parents and trashed = false";
-        request.Fields = "files(id, name, mimeType)";
+        request.Q = $"'{CurrentFolderId}' in parents and {MimeTypeQuery} and trashed = false";
+        request.Fields = "files(id, name, mimeType, createdTime, modifiedTime)";
 
         var result = await request.ExecuteAsync();
 
@@ -145,9 +158,11 @@ public class GoogleDriveManager
     private async Task DownloadFile(Google.Apis.Drive.v3.Data.File file, string localPath, bool force)
     {
         var filePath = Path.Combine(localPath, file.Name);
-        if (!force && File.Exists(filePath))
+        var mdFilePath = Path.ChangeExtension(filePath, ".md");
+
+        if (!force && File.Exists(mdFilePath))
         {
-            AnsiConsole.MarkupLine($"[yellow]File '{filePath}' already exists. Use -f to overwrite.[/]");
+            AnsiConsole.MarkupLine($"[yellow]File '{mdFilePath}' already exists. Use -f to overwrite.[/]");
             return;
         }
 
@@ -155,29 +170,26 @@ public class GoogleDriveManager
 
         try
         {
-            if (file.MimeType == "application/vnd.google-apps.document")
-            {
-                var exportRequest = _service.Files.Export(file.Id, "text/markdown");
-                using var stream = new MemoryStream();
-                await exportRequest.DownloadAsync(stream);
-                stream.Position = 0;
-                using var reader = new StreamReader(stream);
-                var markdown = await reader.ReadToEndAsync();
+            var exportRequest = _service.Files.Export(file.Id, "text/markdown");
+            using var stream = new MemoryStream();
+            await exportRequest.DownloadAsync(stream);
+            stream.Position = 0;
+            using var reader = new StreamReader(stream);
+            var markdown = await reader.ReadToEndAsync();
 
-                var frontMatter = $"---\ntitle: \"{file.Name}\"\ngdrive_id: {file.Id}\n---\n\n";
-                var finalContent = frontMatter + markdown;
+            var frontMatter = $"""
+            ---
+            title: "{file.Name}"
+            gdrive_id: {file.Id}
+            created_time: {file.CreatedTimeDateTimeOffset:o}
+            modified_time: {file.ModifiedTimeDateTimeOffset:o}
+            ---
 
-                var mdFilePath = Path.ChangeExtension(filePath, ".md");
-                await File.WriteAllTextAsync(mdFilePath, finalContent);
-                AnsiConsole.MarkupLine($" Converted to Markdown.");
-            }
-            else
-            {
-                var downloadRequest = _service.Files.Get(file.Id);
-                using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
-                await downloadRequest.DownloadAsync(fileStream);
-                AnsiConsole.MarkupLine($" Done.");
-            }
+            """;
+            var finalContent = frontMatter + markdown;
+
+            await File.WriteAllTextAsync(mdFilePath, finalContent);
+            AnsiConsole.MarkupLine($" Converted to Markdown.");
         }
         catch (Exception ex)
         {
@@ -193,8 +205,8 @@ public class GoogleDriveManager
         AnsiConsole.MarkupLine($"Entering [blue]'{folder.Name}'[/]...");
 
         var request = _service.Files.List();
-        request.Q = $"'{folder.Id}' in parents and trashed = false";
-        request.Fields = "files(id, name, mimeType)";
+        request.Q = $"'{folder.Id}' in parents and {MimeTypeQuery} and trashed = false";
+        request.Fields = "files(id, name, mimeType, createdTime, modifiedTime)";
 
         var result = await request.ExecuteAsync();
 
