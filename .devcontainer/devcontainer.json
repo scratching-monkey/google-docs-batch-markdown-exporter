@@ -1,0 +1,35 @@
+{
+  "name": "Google Docs Batch Markdown Exporter Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:8.0",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "enableNonRootDocker": "true"
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit"
+      ]
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "mounts": [
+     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+     // SSH keys and config
+     "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+     // Git configuration
+     "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
+     // Global Git Ignore
+     "source=${localEnv:HOME}/.gitignore,target=/home/vscode/.gitignore,type=bind,consistency=cached",
+     // GitHub CLI configuration
+     "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached"
+  ]
+}
